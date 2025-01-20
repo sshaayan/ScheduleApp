@@ -3,47 +3,53 @@
 # This is a simple prototype for the Schedule application
 
 from datetime import datetime, timedelta
-# TODO: Move code to personal laptop to install this
 import dateutil.parser as dparser
-import json
+import pickle
 import os
 
 #----- VARIABLES -----
 # -- Constants --
-MAX_GROUP_TASKS = 5
+MAX_GROUP_TASKS = 2
+NULL_VAL = 1000    # For filler, starter entries in taskHistory arrays
 # Task type markers:
 BINARY = 0
 CONTINUOUS = 1
 MEASURED = 2
-# Task history binary yes/no indicator for previous integer
+# Task history binary yes/no indicator for previous integer (NOTE: May not need these)
 YES = 1
 NO = 0
-# Value for tracking excluded tasks in Continuous task history
+# Value for tracking excluded tasks in Continuous task history (NOTE: May not need these)
 EXCLUDED_CONT = 0.5
 
 # -- Hardcoded data --
 class Group:    # Class that holds all data for each group
-    def __init__(self, name):
+    def __init__(self, name, timing1, timing2, timing3, currDate):
         self.name = name
-        self.taskPtrs = []
-        self.timing = [0, 0, 0]
-        self.included = None
+        self.taskPtrs = []  # NOTE: May have to turn this into dict to make deleting tasks easier
+        self.timing = [timing1, timing2, timing3]   # For day, week, and month respectively.
+                                                    # If value is greater than 0, then specific 
+                                                    #   days/weeks/months have been chosen based on bit 
+                                                    #   positions.
+                                                    # If the value is 0, it is included on every day/week/month.
+                                                    # If the value is less than 0, then it is included after a
+                                                    #   specific number of days/weeks/months based on abs(value).
+        self.included = currDate    # The last active date this group was included in
 
 class Task:     # Class that holds all data for each task
-    def __init__(self, name, ttype, displayOpt, group, maxCont=-1):
+    def __init__(self, name, ttype, group, maxCont=-1, displayOpt=0):
         self.keyName = name
         self.ttype = ttype
-        self.displayOpt = displayOpt    # NOTE: Might take this out (only needs type)
         self.groupPtrs = [group]
         self.maxCont = maxCont  # If applicable (only for CONTINUOUS task)
+        self.description = ""
+        self.displayOpt = displayOpt    # NOTE: Might take this out (only needs type)
 
 class OTTask:   # Class that holds all data for each one-time task
     def __init__(self, name, ttype, maxCont=-1):
         self.name = name
         self.ttype = ttype
         self.value = 0
-        self.maxCont = maxCont
-        self.completed = False  # NOTE: Might take this out too (only needs type)
+        self.maxCont = maxCont  # If applicable (only for CONTINUOUS task)
 
 # -- Schedule data --
 taskHistory = {}    # Keeps track of the complete/incomplete,excluded history of all tasks
@@ -100,8 +106,8 @@ def getTodaysTasks(newDate) -> None:
 
         # Add to today's tasks
         for t in group.taskPtrs:
-            if t.keyName not in tasksToday:
-                tasksToday[t.keyName] = 0
+            if t not in tasksToday:
+                tasksToday[t] = 0
 
     return
 
@@ -110,7 +116,7 @@ def dispEntry() -> None:
     indent = "    "
 
     # No tasks for today
-    if len(tasksToday) == 0 and lastDate.date() not in oneTimeTasks:
+    if len(tasksToday) == 0 and len(oneTimes) == 0:
         print("You have no tasks for today.\n")
         return
 
@@ -121,15 +127,15 @@ def dispEntry() -> None:
             taskStatus = "NOT COMPLETED"
             if tasksToday[t]:
                 taskStatus = "COMPLETED"
-            print(indent + allTasks[t].name + ": " + taskStatus)
+            print(indent + allTasks[t].keyName + ": " + taskStatus)
         elif allTasks[t].ttype == CONTINUOUS:
             if tasksToday[t] == allTasks[t].maxCont:
-                print(indent + allTasks[t].name + ": COMPLETED")
+                print(indent + allTasks[t].keyName + ": COMPLETED")
             else:
-                print(indent + allTasks[t].name + ": " + str(tasksToday[t]) + "/" +
+                print(indent + allTasks[t].keyName + ": " + str(tasksToday[t]) + "/" +
                       str(allTasks[t].maxCont))
         elif allTasks[t].ttype == MEASURED:
-            print(indent + allTasks[t].name + ": " + str(tasksToday[t]))
+            print(indent + allTasks[t].keyName + ": " + str(tasksToday[t]))
 
     # Print out today's one-time tasks
     print("\nONE-TIME TASKS:")
@@ -191,22 +197,22 @@ def updateTime(newDate) -> datetime:
 
     # Add tasks from that day that were excluded
     for t in allTasks:
-        if t.keyName in checkedTasks:
+        if t in checkedTasks:
             continue
-        checkedTasks[t.keyName] = True
+        checkedTasks[t] = True
 
         # Add marker for exclusion
-        if t.ttype == BINARY:
-            if taskHistory[t.keyName][-2] < 0:
-                taskHistory[t.keyName][-2] -= 1
+        if allTasks[t].ttype == BINARY:
+            if taskHistory[t][-2] < 0:
+                taskHistory[t][-2] -= 1
             else:
-                taskHistory[t.keyName].append(taskHistory[t.keyName][-1])
-                taskHistory[t.keyName][-1] = -1
-        elif t.ttype == CONTINUOUS or t.ttype == MEASURED:
-            if isinstance(taskHistory[t.keyName][-1], float):
-                taskHistory[t.keyName][-1] += 1
+                taskHistory[t].append(taskHistory[t][-1])
+                taskHistory[t][-1] = -1
+        elif allTasks[t].ttype == CONTINUOUS or allTasks[t].ttype == MEASURED:
+            if isinstance(taskHistory[t][-1], float):
+                taskHistory[t][-1] += 1
             else:
-                taskHistory[t.keyName].append(0.5)
+                taskHistory[t].append(EXCLUDED_CONT)
 
     # Add all incomplete or excluded values for tasks up to today
     # NOTE: The included tasks needed to be marked first, because there may be a task
@@ -228,33 +234,33 @@ def updateTime(newDate) -> datetime:
             # Mark that this group has been checked
             checkedGroups[group.name] = True
             for t in group.taskPtrs:
-                if t.keyName in checkedTasks:
+                if t in checkedTasks:
                     continue
-                checkedTasks[t.keyName] = True
+                checkedTasks[t] = True
 
                 # Mark task as incomplete in task history
-                if t.ttype == BINARY:
+                if allTasks[t].ttype == BINARY:
                     # Again accounting for excluded entries
                     addPtr = -2
-                    if taskHistory[t.keyName][-2] < 0:
+                    if taskHistory[t][-2] < 0:
                         addPtr = -3
 
-                    if taskHistory[t.keyName][-1] == 0:
-                        taskHistory[t.keyName][addPtr] += 1
+                    if taskHistory[t][-1] == 0:
+                        taskHistory[t][addPtr] += 1
                     else:
-                        taskHistory[t.keyName][-1] = 1
-                        taskHistory[t.keyName].append(0)
-                elif t.ttype == CONTINUOUS or t.ttype == MEASURED:
-                    if taskHistory[t.keyName][-1] < 0:
-                        if taskHistory[t.keyName][-2] == 0:
-                            taskHistory[t.keyName][-1] -= 1
+                        taskHistory[t][-1] = 1
+                        taskHistory[t].append(0)
+                elif allTasks[t].ttype == CONTINUOUS or allTasks[t].ttype == MEASURED:
+                    if taskHistory[t][-1] < 0:
+                        if taskHistory[t][-2] == 0:
+                            taskHistory[t][-1] -= 1
                         else:
-                            taskHistory[t.keyName].append(0)
+                            taskHistory[t].append(0)
                     else:
-                        if taskHistory[t.keyName][-1] == 0:
-                            taskHistory[t.keyName].append(-2)
+                        if taskHistory[t][-1] == 0:
+                            taskHistory[t].append(-2)
                         else:
-                            taskHistory[t.keyName].append(0)
+                            taskHistory[t].append(0)
 
         # Go through the groups and add relevant tasks (for excluded)
         checkedTasks = {}
@@ -263,76 +269,212 @@ def updateTime(newDate) -> datetime:
                 continue
 
             for t in group.taskPtrs:
-                if t.keyName in checkedTasks:
+                if t in checkedTasks:
                     continue
-                checkedTasks[t.keyName] = True
+                checkedTasks[t] = True
 
                 # Mark as excluded in task history
-                if t.ttype == BINARY:
-                    if taskHistory[t.keyName][-2] < 0:
-                        taskHistory[t.keyName][-2] -= 1
+                if allTasks[t].ttype == BINARY:
+                    if taskHistory[t][-2] < 0:
+                        taskHistory[t][-2] -= 1
                     else:
-                        taskHistory[t.keyName].append(taskHistory[t.keyName][-1])
-                        taskHistory[t.keyName][-1] = -1
-                elif t.ttype == CONTINUOUS or t.ttype == MEASURED:
-                    if isinstance(taskHistory[t.keyName][-1], float):
-                        taskHistory[t.keyName][-1] += 1
+                        taskHistory[t].append(taskHistory[t][-1])
+                        taskHistory[t][-1] = -1
+                elif allTasks[t].ttype == CONTINUOUS or allTasks[t].ttype == MEASURED:
+                    if isinstance(taskHistory[t][-1], float):
+                        taskHistory[t][-1] += 1
                     else:
-                        taskHistory[t.keyName].append(0.5)
+                        taskHistory[t].append(EXCLUDED_CONT)
 
         # Update the last date by a day until it reaches the current date
-        newLastDate = lastDate + timedelta(days=1)
+        newLastDate = newLastDate + timedelta(days=1)
 
     return newLastDate
 
-# Save the data before the program ends using JSON
-def saveData() -> None:
-    global otherVars
+# Add a new task
+def addTask(currDate) -> None:
+    # Get general info for this new task
+    nameExists = True
+    taskName = ""
+    while nameExists == True:
+        taskName = input("What name do you want for this task? (Don't choose an existing name)\n")
+        if taskName not in allTasks:
+            nameExists = False
 
-    with open("taskhistory.json", 'w') as f:
-        json.dump(taskHistory, f)
-    with open("alltasks.json", 'w') as f:
-        json.dump(allTasks, f)
-    with open("onetimetasks.json", 'w') as f:
-        json.dump(oneTimeTasks, f)
-    with open("currgraph.json", 'w') as f:
-        json.dump(currGraph, f)
-    with open("taskstoday.json", 'w') as f:
-        json.dump(tasksToday, f)
+    taskType = -1
+    thisMaxCont = -1
+    while (taskType < 0) or (taskType > MAX_GROUP_TASKS):
+        taskType = input("What type of task is this? ('0' for Binary, '1' for Continuous, and '2' for Measured)\n")
+        taskType = int(taskType)
+    if taskType == CONTINUOUS:
+        thisMaxCont = int(input("What is the max count value for this task?\n"))
+    isOTT = input("Is this a one-time task? (Answer 'Y' for Yes and 'N' for No)\n")
 
-    otherVars = {"lastdate": lastDate, "othermedia": otherMedia, "allgroups": allGroups, "onetimes": oneTimes}
-    with open("othervars.json", 'w') as f:
-        json.dump(otherVars, f, default=str)
+    # Create OTT if applicable
+    if isOTT == 'Y':
+        oneTimes.append(OTTask(taskName, taskType, thisMaxCont))
+        return
+
+    # Check if an older, deleted task with that name is already in taskHistory
+    if taskName in taskHistory:
+        print("A task with that name has existed before in Task History.")
+        overwrite = input("Would you like to overwrite that history completely with this new task?\n")
+        if overwrite == 'N':
+            return
+
+    # Create general task otherwise
+    addToGroup = False
+    addToGroup = int(input("Would you like add this to a group? Otherwise a new group will be created. (1 for Yes, 0 for No)\n"))
+    if addToGroup == True:
+        if len(allGroups) == 0:
+            print("You have no groups to add to.\n")
+            return
+
+        print("All Groups:\n")
+        for i in range(0, len(allGroups)):
+            print("    " + str(i) + ":", allGroups[i].name, "\n")
+
+        groupID = -1
+        while (groupID < 0) or (groupID >= len(allGroups)):
+            groupID = int(input("Which group would you like to add it to? (Enter the value)\n"))
+        allGroups[groupID].taskPtrs.append(taskName)
+        allTasks[taskName] = Task(taskName, taskType, allGroups[groupID].name, thisMaxCont)
+        taskHistory[taskName] = [NULL_VAL, NULL_VAL, NULL_VAL]
+
+        return
+
+    # Create group with task if applicable (no existing group was chosen above)
+    nameExists = True
+    groupName = ""
+    while nameExists == True:
+        groupName = input("What name do you want for this group? (Don't choose an existing name)\n")
+        nameExists = False
+        for grp in allGroups:
+            if groupName == grp.name:
+                nameExists = True
+
+    print("Now you need to set the timing of this group task for the day, week, and month.")
+    print("Enter a 0 for this task to happen every time period, a positive number for specific points in this time period (represented by bits), or a negative number to skip a certain time period value.")
+    dayTiming = -7
+    weekTiming = -4
+    monthTiming = -12
+    while (dayTiming < -6) or (dayTiming > 127):
+        dayTiming = int(input("Timing for day:\n"))
+    while (weekTiming < -3) or (weekTiming > 4503599627370495):
+        weekTiming = int(input("Timing for week:\n"))
+    while (monthTiming < -11) or (monthTiming > 4095):
+        monthTiming = int(input("Timing for month:\n"))
+
+    allGroups.append(Group(groupName, dayTiming, weekTiming, monthTiming, currDate))
+    allGroups[-1].taskPtrs.append(taskName)
+    allTasks[taskName] = Task(taskName, taskType, groupName, thisMaxCont)
+    tasksToday[taskName] = 0
+    taskHistory[taskName] = [NULL_VAL, NULL_VAL, NULL_VAL]
 
     return
 
-# Retrieve all the stored data from JSON file
+# Delete an existing task
+def deleteTask() -> None:
+    deleteName = input("Enter the name of the task you would like to delete.\n")
+    if deleteName not in allTasks:
+        print("This task does not exist. Try again.")
+        return
+
+    for grp in allTasks[deleteName].groupPtrs:
+        if len(allGroups[grp].taskPtrs) <= 1:
+            print("This will delete the group known as:", grp)
+            deleteGroup = input("Is that okay?\n")
+
+            # There exists a group that should still exist, so end operation
+            if deleteGroup == "N":
+                return
+
+    for grp in allTasks[deleteName].groupPtrs:
+        del allGroups[grp]
+    del allTasks[deleteName]
+
+    return
+
+# Remove an existing task from an existing group
+def removeFromGroup() -> None:
+    removeGroup = input("Enter the name of the group you want to remove a task from.\n")
+    if removeGroup not in allGroups:
+        print("This group does not exist. Try again.")
+        return
+
+    removeName = input("Enter the name of the task you would like to remove.\n")
+    if removeName not in allGroups[removeGroup].taskPtrs:
+        print("This task is not in this group. Try again.")
+        return
+
+    # Check if this is the only group this task is in. If so, redirect to deleteTask function.
+    if len(allTasks[removeName].groupPtrs) <= 1:
+        print("This will delete the task, since it exists in only one group.")
+        print("Use the 'Delete Task' function instead.")
+        return
+
+    if len(allGroups[removeGroup].taskPtrs) <= 1:
+        deleteGroup = input("This will delete the group. Is that okay?\n")
+        if deleteGroup == "Y":
+            del allGroups[removeGroup]
+        else:
+            return
+
+    # TODO: Remove task from *allGroups[removeGroup].taskPtrs*. Difficult since it is an array.
+    return
+
+# Mark the progress on one of today's tasks
+def markTask() -> None:
+    # TODO
+    return
+
+# Save the data before the program ends using Pickle
+def saveData() -> None:
+    global otherVars
+
+    with open("taskhistory.pkl", 'wb') as f:
+        pickle.dump(taskHistory, f)
+    with open("alltasks.pkl", 'wb') as f:
+        pickle.dump(allTasks, f)
+    with open("onetimetasks.pkl", 'wb') as f:
+        pickle.dump(oneTimeTasks, f)
+    with open("currgraph.pkl", 'wb') as f:
+        pickle.dump(currGraph, f)
+    with open("taskstoday.pkl", 'wb') as f:
+        pickle.dump(tasksToday, f)
+
+    otherVars = {"lastdate": lastDate, "othermedia": otherMedia, "allgroups": allGroups, "onetimes": oneTimes}
+    with open("othervars.pkl", 'wb') as f:
+        pickle.dump(otherVars, f)
+
+    return
+
+# Retrieve all the stored data from Pickle file
 # NOTE: This function assumes the files exist
-# TODO: May need to do something to account for pointers
 def loadData() -> None:
     global taskHistory, allTasks, oneTimeTasks, currGraph, tasksToday, otherVars, lastDate, otherMedia, \
             allGroups, oneTimes
 
-    f = open("taskhistory.json")
-    taskHistory = json.load(f)
+    f = open("taskhistory.pkl", "rb")
+    taskHistory = pickle.load(f)
     f.close()
-    f = open("alltasks.json")
-    allTasks = json.load(f)
+    f = open("alltasks.pkl", "rb")
+    allTasks = pickle.load(f)
     f.close()
-    f = open("onetimetasks.json")
-    oneTimeTasks = json.load(f)
+    f = open("onetimetasks.pkl", "rb")
+    oneTimeTasks = pickle.load(f)
     f.close()
-    f = open("currgraph.json")
-    currGraph = json.load(f)
+    f = open("currgraph.pkl", "rb")
+    currGraph = pickle.load(f)
     f.close()
-    f = open("taskstoday.json")
-    tasksToday = json.load(f)
+    f = open("taskstoday.pkl", "rb")
+    tasksToday = pickle.load(f)
     f.close()
 
-    f = open("othervars.json")
-    otherVars = json.load(f)
+    f = open("othervars.pkl", "rb")
+    otherVars = pickle.load(f)
     f.close()
-    lastDate = dparser.parse(otherVars["lastdate"])
+    lastDate = otherVars["lastdate"]
     otherMedia = otherVars["othermedia"]
     allGroups = otherVars["allgroups"]
     oneTimes = otherVars["onetimes"]
@@ -353,7 +495,8 @@ if __name__ == '__main__':
 
     # Check if this program is being run for the first time before loading data
     # NOTE: Files will already be initialized in app version
-    if not os.path.isfile("taskhistory.json") or os.access("taskhistory.json", os.R_OK):
+    if not os.path.isfile("taskhistory.pkl") or not os.access("taskhistory.pkl", os.R_OK):
+        print("HERE")
         saveData()
     loadData()
 
@@ -367,7 +510,12 @@ if __name__ == '__main__':
     while running:
         # Print the menu and receive an input
         menu = {"q": "Quit",
-                "t": "Today's Entry"}
+                "t": "Today's Entry",
+                "a": "Add a Task",
+                "c": "Mark a Task's Progress",
+                "d": "Delete a Task,"
+                "r": "Remove a Task from a Group"
+                "x": "Debug"}
         print("Welcome to your schedule app.\nMenu:")
         for key in menu:
             print("   ", key, "-", menu[key])
@@ -379,9 +527,17 @@ if __name__ == '__main__':
         elif choice == "t":     # Show the tasks you have for today
             dispEntry()
         elif choice == "a":     # Create a task
-            # TODO: Create this method to add a task
-            pass
-
+            addTask(currDate)
+        elif choice == "c":     # Mark that a task (or part of it) has been completed
+            markTask()
+        elif choice == "d":     # Delete a task
+            deleteTask()
+        elif choice == "r":
+            removeFromGroup()   # Removes a task from a group
+        elif choice == "x":
+            for t in tasksToday:
+                print(allTasks[t].ttype)
+            print(allTasks)
     # Save the data
     saveData()
 
